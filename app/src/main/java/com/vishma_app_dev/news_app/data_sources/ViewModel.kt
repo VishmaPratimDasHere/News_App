@@ -21,7 +21,7 @@ class ViewModel1(context: Context) : ViewModel() {
 
     companion object {
         // TODO: move to BuildConfig or secure storage
-        private const val API_KEY = "8472bd67732a460cac1060347b2fe44f"
+        private const val API_KEY = "340ee4a3e0054205a3f585058563f16b"
     }
 
     // News feed

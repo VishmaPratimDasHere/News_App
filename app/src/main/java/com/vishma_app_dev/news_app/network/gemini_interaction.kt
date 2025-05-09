@@ -1,41 +1,78 @@
-//package com.vishma_app_dev.news_app.models
-//
-//import com.google.ai.client.generativeai.GenerativeModel
-//import com.google.ai.client.generativeai.type.Content
-//import com.google.ai.client.generativeai.type.GenerateContentResponse
-//import com.google.ai.client.generativeai.type.GenerationConfig
-//import com.google.ai.client.generativeai.type.Part
-//import com.google.ai.client.generativeai.type.SafetySetting
-//
-//data class GeminiChatRequest(
-//    val contents: List<GeminiContent>
-//)
-//
-//data class GeminiContent(
-//    val role: String? = null,
-//    val parts: List<GeminiPart>
-//)
-//
-//data class GeminiPart(
-//    val text: String? = null
-//)
-//
-//suspend fun chatWithGemini(
-//    apiKey: String,
-//    modelName: String = "gemini-1.5-flash", // Or try "gemini-pro"
-//    messages: List<Content>,
-//    generationConfig: GenerationConfig? = null,
-//    safetySettings: List<SafetySetting>? = null
-//): GenerateContentResponse {
-//    val generativeModel = GenerativeModel(
-//        modelName = modelName,
-//        apiKey = apiKey,
-//        generationConfig = generationConfig,
-//        safetySettings = safetySettings
-//    )
-//    val chat = generativeModel.startChat(
-//        history = messages
-//    )
-//
-//    return chat.sendMessage(messages.last().parts.first())
-//}
+package com.yourapp.translator
+
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+
+// Coroutines
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.tasks.await   // <-- comes from coroutines-play-services
+
+// ML Kit
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.Translator
+import com.google.mlkit.nl.translate.TranslatorOptions
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.ui.Modifier
+
+class TranslatorExampleActivity : ComponentActivity() {
+
+    // on-device translator client (EN → HI)
+    private val translator: Translator by lazy {
+        val options = TranslatorOptions.Builder()
+            .setSourceLanguage(TranslateLanguage.ENGLISH)
+            .setTargetLanguage(TranslateLanguage.HINDI)
+            .build()
+        Translation.getClient(options)
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        setContent {
+            var uiText by remember { mutableStateOf("Preparing model…") }
+
+            LaunchedEffect(Unit) {
+                uiText = try {
+                    // 1) download model if needed (suspends)
+                    withContext(Dispatchers.IO) {
+                        translator.downloadModelIfNeeded().await()
+                    }
+                    // 2) translate (suspends)
+                    withContext(Dispatchers.IO) {
+                        translator.translate("Here’s some sample content to translate.").await()
+                    }
+                } catch (e: Exception) {
+                    "Error: ${e.localizedMessage}"
+                }
+            }
+
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.background
+            ) {
+                Text(
+                    text = uiText,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        translator.close() // free model resources
+    }
+}

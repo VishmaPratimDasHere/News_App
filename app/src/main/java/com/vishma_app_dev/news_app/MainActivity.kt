@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import java.util.Locale
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -37,7 +38,20 @@ import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.vishma_app_dev.news_app.data_sources.ViewModel1
 import com.vishma_app_dev.news_app.favourites.FavNewsEntity
 import com.vishma_app_dev.news_app.network.Article
+import com.vishma_app_dev.news_app.network.Source
 import com.vishma_app_dev.news_app.ui.theme.News_AppTheme
+
+// added by akash for ML translator
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.TranslatorOptions
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -248,7 +262,7 @@ fun HomeScreen(
                     }
                 },
                 text = {
-                    NewsDetailContent(art)
+                    NewsDetailContent(art, onClose = {})
                 }
             )
         }
@@ -332,7 +346,7 @@ fun BookmarkScreen(
     onBack: () -> Unit
 ) {
     val favs by viewModel.getAllFavorites().collectAsState(initial = emptyList())
-
+    var isReading by remember { mutableStateOf<FavNewsEntity?>(null) }
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -355,9 +369,39 @@ fun BookmarkScreen(
                 Text("No bookmarks yet")
             }
         } else {
+            if (isReading!=null){
+                BasicAlertDialog(
+                    onDismissRequest = {
+                        isReading=null
+                    },
+                ) {
+                    Card {
+                        NewsDetailContent(
+                            Article(
+                                source= Source(isReading?.source ?: ""),
+                                author = (isReading?.author ?: "").toString(),
+                                title = isReading?.title ?: "",
+                                url = isReading?.url ?: "",
+                                urlToImage = isReading?.urlToImage ?: "",
+                                description = isReading?.description ?: ""
+                            )
+                        )
+                        Spacer(Modifier.height(24.dp))
+                        Button(
+                            onClick = {
+                                isReading=null
+                            }
+                        ) {
+                            Text("close")
+                        }
+                    }
+                }
+            }
             LazyColumn(Modifier.padding(padding)) {
                 items(favs) { fav ->
-                    FavNewsItem(fav = fav, viewModel = viewModel)
+                    FavNewsItem(fav = fav, viewModel = viewModel, onClick={
+                        isReading=fav
+                    })
                 }
             }
         }
@@ -367,12 +411,16 @@ fun BookmarkScreen(
 @Composable
 fun FavNewsItem(
     fav: FavNewsEntity,
-    viewModel: ViewModel1
+    viewModel: ViewModel1,
+    onClick: () -> Unit
 ) {
     Card(
         Modifier
             .fillMaxWidth()
-            .padding(8.dp),
+            .padding(8.dp)
+            .clickable {
+                onClick()
+            },
         elevation = CardDefaults.cardElevation(2.dp),
         shape = RoundedCornerShape(8.dp)
     ) {
@@ -410,24 +458,42 @@ fun FavNewsItem(
 }
 
 @Composable
-fun NewsDetailContent(article: Article) {
+fun NewsDetailContent(
+    article: Article,
+    onClose: () -> Unit ={}
+) {
     val context = LocalContext.current
 
-    // Create and remember a TTS engine, then immediately apply the default locale
+    // TTS (so your Read-Aloud still works)
     val tts = remember {
         TextToSpeech(context) { /* no-op */ }
             .apply { setLanguage(Locale.getDefault()) }
     }
+
+    // ML Kit translator setup
+    val translator = remember {
+        val opts = TranslatorOptions.Builder()
+            .setSourceLanguage(TranslateLanguage.ENGLISH)
+            .setTargetLanguage(TranslateLanguage.HINDI)
+            .build()
+        Translation.getClient(opts)
+    }
+
+    var showingHindi by rememberSaveable { mutableStateOf(false) }
+    var translatedDescription by rememberSaveable { mutableStateOf("") }
+    var isTranslating by rememberSaveable { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Column(
         Modifier
             .fillMaxWidth()
             .padding(8.dp)
     ) {
+        // — Your existing image
         AsyncImage(
             model = article.urlToImage,
             contentDescription = article.title,
-            Modifier
+            modifier = Modifier
                 .fillMaxWidth()
                 .height(180.dp)
                 .clip(RoundedCornerShape(8.dp)),
@@ -436,6 +502,7 @@ fun NewsDetailContent(article: Article) {
 
         Spacer(Modifier.height(8.dp))
 
+        // — Your existing title
         Text(
             text = article.title.orEmpty(),
             style = MaterialTheme.typography.titleLarge,
@@ -445,40 +512,80 @@ fun NewsDetailContent(article: Article) {
 
         Spacer(Modifier.height(4.dp))
 
+        // — Description swaps between English & Hindi
         Text(
-            text = article.description.orEmpty(),
+            text = if (showingHindi && translatedDescription.isNotBlank())
+                translatedDescription
+            else
+                article.description.orEmpty(),
             style = MaterialTheme.typography.bodyMedium
         )
 
         Spacer(Modifier.height(16.dp))
 
-        // Read Aloud button with accessibility semantics
-        Button(
-            onClick = {
-                val toSpeak = "${article.title}. ${article.description.orEmpty()}"
-                tts.speak(toSpeak, TextToSpeech.QUEUE_FLUSH, null, null)
-            },
-            modifier = Modifier.semantics {
-                contentDescription = "Read article aloud"
-            }
-        ) {
+        // — Read-Aloud button (unchanged)
+        Button(onClick = {
+            val toSpeak = "${article.title}. ${article.description.orEmpty()}"
+            tts.speak(toSpeak, TextToSpeech.QUEUE_FLUSH, null, null)
+        }) {
             Icon(Icons.Filled.AddCircle, contentDescription = null)
             Spacer(Modifier.width(4.dp))
             Text("Read Aloud")
         }
 
+        Spacer(Modifier.width(8.dp))
+
+        // — Translate / Show English toggle
+        Button(
+            onClick = {
+                if (!showingHindi) {
+                    isTranslating = true
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            translator.downloadModelIfNeeded().await()
+                            translatedDescription = translator
+                                .translate(article.description.orEmpty())
+                                .await()
+                            isTranslating = false
+                            showingHindi = true
+                        } catch (e: Exception){
+                            Log.d("Translation Error","Trsndlstion failed", e)
+                        }
+                    }
+                } else {
+                    showingHindi = false
+                }
+            },
+            enabled = !isTranslating
+        ) {
+            Text(
+                when {
+                    showingHindi  -> "Show English"
+                    isTranslating -> "Translating…"
+                    else          -> "Translate"
+                }
+            )
+        }
+
         Spacer(Modifier.height(16.dp))
 
-        // External link
+        // — For more info link
         Text(
             "For more info: click here",
             color = Color.Blue,
-            style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.clickable {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(article.url))
-                context.startActivity(intent)
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(article.url))
+                )
             }
         )
+
+        Spacer(Modifier.height(16.dp))
+
+        // — Close button (unchanged)
+        TextButton(onClick = onClose) {
+            Text("Close")
+        }
     }
 }
 
